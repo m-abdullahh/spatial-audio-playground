@@ -26,13 +26,15 @@ export default function Home() {
   const positionsInitializedRef = useRef(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordedChunksRef = useRef<Blob[]>([]);
+  const recordedAudioUrlRef = useRef<string | null>(null);
 
   useEffect(() => {
     engineRef.current = new SpatialAudioEngine();
 
     return () => {
-      if (recordedAudioUrl) {
-        URL.revokeObjectURL(recordedAudioUrl);
+      if (recordedAudioUrlRef.current) {
+        URL.revokeObjectURL(recordedAudioUrlRef.current);
+        recordedAudioUrlRef.current = null;
       }
       if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
         mediaRecorderRef.current.stop();
@@ -40,7 +42,7 @@ export default function Home() {
       engineRef.current?.dispose();
       engineRef.current = null;
     };
-  }, [recordedAudioUrl]);
+  }, []);
 
   useEffect(() => {
     const engine = engineRef.current;
@@ -81,6 +83,13 @@ export default function Home() {
       stopRecording();
       engine.disconnectMicrophone(true);
       setIsMicReady(false);
+    }
+
+    if (recordedAudioUrlRef.current) {
+      URL.revokeObjectURL(recordedAudioUrlRef.current);
+      recordedAudioUrlRef.current = null;
+      setRecordedAudioUrl(null);
+      setRecordedAudioName('spatial-microphone-recording.webm');
     }
 
     setSourceMode('file');
@@ -182,6 +191,10 @@ export default function Home() {
       const extension = mimeType.includes('webm') ? 'webm' : 'dat';
       const blob = new Blob(recordedChunksRef.current, { type: mimeType });
       const url = URL.createObjectURL(blob);
+      if (recordedAudioUrlRef.current) {
+        URL.revokeObjectURL(recordedAudioUrlRef.current);
+      }
+      recordedAudioUrlRef.current = url;
       setRecordedAudioUrl(url);
       setRecordedAudioName(`spatial-microphone-recording-${Date.now()}.${extension}`);
       recordedChunksRef.current = [];
@@ -240,7 +253,7 @@ export default function Home() {
               >
                 {sourceMode === 'microphone' ? (
                   <>
-                    <Mic className="w-4 h-4 mr-2" />
+                    {isMicReady ? <Square className="w-4 h-4 mr-2" /> : <Mic className="w-4 h-4 mr-2" />}
                     {isMicReady ? 'Stop Monitor' : 'Monitor'}
                   </>
                 ) : (
