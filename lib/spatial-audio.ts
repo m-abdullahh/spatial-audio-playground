@@ -14,11 +14,16 @@ export interface RoomSize {
   h: number;
 }
 
+type MicrophoneInput = {
+  deviceId?: string;
+};
+
 export class SpatialAudioEngine {
   ctx: AudioContext;
   source: AudioBufferSourceNode | null = null;
   microphoneSource: MediaStreamAudioSourceNode | null = null;
   microphoneStream: MediaStream | null = null;
+  microphoneRequest: Promise<MediaStream> | null = null;
   buffer: AudioBuffer | null = null;
 
   gainNode: GainNode;
@@ -106,6 +111,47 @@ export class SpatialAudioEngine {
     }
   }
 
+  private hasLiveMicrophoneStream() {
+    return Boolean(
+      this.microphoneStream?.getAudioTracks().some((track) => track.readyState === 'live')
+    );
+  }
+
+  private async requestMicrophoneStream(input: MicrophoneInput = {}) {
+    if (!this.microphoneRequest) {
+      const audioConstraints: MediaStreamConstraints['audio'] = input.deviceId
+        ? {
+            deviceId: { exact: input.deviceId },
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          }
+        : true;
+
+      this.microphoneRequest = navigator.mediaDevices
+        .getUserMedia({ audio: audioConstraints })
+        .catch(async (error) => {
+          this.microphoneRequest = null;
+
+          if (
+            input.deviceId &&
+            error instanceof DOMException &&
+            (error.name === 'NotReadableError' || error.name === 'OverconstrainedError')
+          ) {
+            return navigator.mediaDevices.getUserMedia({ audio: true });
+          }
+
+          throw error;
+        });
+    }
+
+    try {
+      return await this.microphoneRequest;
+    } finally {
+      this.microphoneRequest = null;
+    }
+  }
+
   async ensureReady() {
     if (this.ctx.state === 'suspended') {
       await this.ctx.resume();
@@ -135,7 +181,7 @@ export class SpatialAudioEngine {
     this.source = source;
   }
 
-  async startMicrophoneMonitoring(stream?: MediaStream) {
+  async startMicrophoneMonitoring(stream?: MediaStream, input: MicrophoneInput = {}) {
     await this.ensureReady();
     this.stopPlayback();
 
@@ -144,15 +190,21 @@ export class SpatialAudioEngine {
       this.microphoneStream = stream;
     }
 
-    if (!this.microphoneStream) {
-      this.microphoneStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    if (!this.hasLiveMicrophoneStream()) {
+      this.disconnectMicrophone(true);
+      this.microphoneStream = await this.requestMicrophoneStream(input);
+    }
+
+    const microphoneStream = this.microphoneStream;
+    if (!microphoneStream) {
+      throw new Error('Microphone stream is unavailable');
     }
 
     this.disconnectMicrophone(false);
-    this.microphoneSource = this.ctx.createMediaStreamSource(this.microphoneStream);
+    this.microphoneSource = this.ctx.createMediaStreamSource(microphoneStream);
     this.microphoneSource.connect(this.lowShelf);
 
-    return this.microphoneStream;
+    return microphoneStream;
   }
 
   getRecordingStream() {

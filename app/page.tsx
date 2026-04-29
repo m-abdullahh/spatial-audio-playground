@@ -8,12 +8,38 @@ import ControlPanel from '@/components/control-panel';
 import Analytics from '@/components/analytics';
 import { SpatialAudioEngine, type Position } from '@/lib/spatial-audio';
 
+type MicrophoneDevice = {
+  deviceId: string;
+  label: string;
+};
+
+function getMicrophoneErrorMessage(error: unknown) {
+  const errorName = error instanceof DOMException ? error.name : 'UnknownError';
+
+  if (errorName === 'NotReadableError') {
+    return 'Your microphone was found but could not start. Close other apps using it, choose another input, then try again.';
+  }
+
+  if (errorName === 'NotAllowedError') {
+    return 'This browser session is still blocking microphone access. Check site settings, or open the localhost link in Chrome/Edge directly if the in-app browser keeps denying it.';
+  }
+
+  if (errorName === 'OverconstrainedError') {
+    return 'That microphone input is unavailable. Try System default microphone or refresh the input list.';
+  }
+
+  return 'Microphone start failed. Please check the device and try again.';
+}
+
 export default function Home() {
   const [sourceMode, setSourceMode] = useState<'file' | 'microphone'>('file');
   const [audioFile, setAudioFile] = useState<File | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isMicReady, setIsMicReady] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
+  const [micError, setMicError] = useState<string | null>(null);
+  const [microphoneDevices, setMicrophoneDevices] = useState<MicrophoneDevice[]>([]);
+  const [selectedMicrophoneId, setSelectedMicrophoneId] = useState('default');
   const [recordedAudioUrl, setRecordedAudioUrl] = useState<string | null>(null);
   const [recordedAudioName, setRecordedAudioName] = useState<string>('spatial-microphone-recording.webm');
   const [reverbAmount, setReverbAmount] = useState(0.3);
@@ -27,9 +53,11 @@ export default function Home() {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordedChunksRef = useRef<Blob[]>([]);
   const recordedAudioUrlRef = useRef<string | null>(null);
+  const micStartInProgressRef = useRef(false);
 
   useEffect(() => {
     engineRef.current = new SpatialAudioEngine();
+    void refreshMicrophoneDevices();
 
     return () => {
       if (recordedAudioUrlRef.current) {
@@ -43,6 +71,32 @@ export default function Home() {
       engineRef.current = null;
     };
   }, []);
+
+  const refreshMicrophoneDevices = async () => {
+    if (!navigator.mediaDevices?.enumerateDevices) {
+      setMicError('This browser does not expose microphone device selection.');
+      return [];
+    }
+
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const audioInputs = devices
+      .filter((device) => device.kind === 'audioinput')
+      .map((device, index) => ({
+        deviceId: device.deviceId,
+        label: device.label || `Microphone ${index + 1}`,
+      }));
+
+    setMicrophoneDevices(audioInputs);
+
+    if (
+      selectedMicrophoneId !== 'default' &&
+      !audioInputs.some((device) => device.deviceId === selectedMicrophoneId)
+    ) {
+      setSelectedMicrophoneId('default');
+    }
+
+    return audioInputs;
+  };
 
   useEffect(() => {
     const engine = engineRef.current;
@@ -83,6 +137,7 @@ export default function Home() {
       stopRecording();
       engine.disconnectMicrophone(true);
       setIsMicReady(false);
+      setMicError(null);
     }
 
     if (recordedAudioUrlRef.current) {
@@ -134,22 +189,59 @@ export default function Home() {
 
   const enableMicrophoneMonitoring = async () => {
     const engine = engineRef.current;
-    if (!engine) {
-      return;
+    if (!engine || micStartInProgressRef.current) {
+      return false;
     }
 
     try {
+      micStartInProgressRef.current = true;
+      setMicError(null);
+      setSourceMode('microphone');
       if (audioFile && isPlaying) {
         engine.stopPlayback();
       }
-      await engine.startMicrophoneMonitoring();
-      setSourceMode('microphone');
+      await engine.startMicrophoneMonitoring(undefined, {
+        deviceId: selectedMicrophoneId === 'default' ? undefined : selectedMicrophoneId,
+      });
+      void refreshMicrophoneDevices();
+      setIsMicReady(true);
+      setIsPlaying(true);
+      return true;
+    } catch (error) {
+      console.error('Error enabling microphone:', error);
+      setMicError(getMicrophoneErrorMessage(error));
+      setIsMicReady(false);
+      setIsPlaying(false);
+      return false;
+    } finally {
+      micStartInProgressRef.current = false;
+    }
+  };
+
+  const handleMicrophoneDeviceChange = async (deviceId: string) => {
+    const engine = engineRef.current;
+    setSelectedMicrophoneId(deviceId);
+
+    if (!engine || !isMicReady) {
+      return;
+    }
+
+    stopRecording();
+    engine.disconnectMicrophone(true);
+    setIsMicReady(false);
+    setIsPlaying(false);
+
+    try {
+      setMicError(null);
+      await engine.startMicrophoneMonitoring(undefined, {
+        deviceId: deviceId === 'default' ? undefined : deviceId,
+      });
+      void refreshMicrophoneDevices();
       setIsMicReady(true);
       setIsPlaying(true);
     } catch (error) {
-      console.error('Error enabling microphone:', error);
-      setIsMicReady(false);
-      setIsPlaying(false);
+      console.error('Error changing microphone:', error);
+      setMicError(getMicrophoneErrorMessage(error));
     }
   };
 
@@ -159,8 +251,13 @@ export default function Home() {
       return;
     }
 
-    if (!isMicReady) {
-      await enableMicrophoneMonitoring();
+    let readyToRecord = isMicReady;
+    if (!readyToRecord) {
+      readyToRecord = await enableMicrophoneMonitoring();
+    }
+
+    if (!readyToRecord) {
+      return;
     }
 
     if (!engine.getRecordingStream()) {
@@ -278,9 +375,16 @@ export default function Home() {
             </p>
           )}
           {sourceMode === 'microphone' && (
-            <p className="text-xs text-muted-foreground">
-              Monitor yourself first, set the room and mic position, then record the processed output. Headphones recommended.
-            </p>
+            <div className="space-y-1">
+              <p className="text-xs text-muted-foreground">
+                Monitor yourself first, set the room and mic position, then record the processed output. Headphones recommended.
+              </p>
+              {micError && (
+                <p className="text-xs text-destructive">
+                  {micError}
+                </p>
+              )}
+            </div>
           )}
         </div>
       </header>
@@ -317,6 +421,10 @@ export default function Home() {
               onStopRecording={stopRecording}
               recordedAudioUrl={recordedAudioUrl}
               recordedAudioName={recordedAudioName}
+              microphoneDevices={microphoneDevices}
+              selectedMicrophoneId={selectedMicrophoneId}
+              onMicrophoneDeviceChange={handleMicrophoneDeviceChange}
+              onRefreshMicrophoneDevices={refreshMicrophoneDevices}
             />
 
             {/* Analytics */}

@@ -17,6 +17,13 @@ interface ControlPanelProps {
   onStopRecording: () => void;
   recordedAudioUrl: string | null;
   recordedAudioName: string;
+  microphoneDevices: Array<{
+    deviceId: string;
+    label: string;
+  }>;
+  selectedMicrophoneId: string;
+  onMicrophoneDeviceChange: (deviceId: string) => void;
+  onRefreshMicrophoneDevices: () => void;
 }
 
 export default function ControlPanel({
@@ -33,6 +40,10 @@ export default function ControlPanel({
   onStopRecording,
   recordedAudioUrl,
   recordedAudioName,
+  microphoneDevices,
+  selectedMicrophoneId,
+  onMicrophoneDeviceChange,
+  onRefreshMicrophoneDevices,
 }: ControlPanelProps) {
   return (
     <Card className="bg-card border-border p-4">
@@ -111,6 +122,31 @@ export default function ControlPanel({
           <p className="text-xs text-muted-foreground leading-relaxed mb-3">
             In microphone mode you can monitor your voice through the spatial chain first, then record the processed output exactly as configured.
           </p>
+          <div className="mb-3 space-y-2">
+            <label className="text-xs font-medium text-muted-foreground" htmlFor="microphone-input">
+              Input Device
+            </label>
+            <select
+              id="microphone-input"
+              value={selectedMicrophoneId}
+              onChange={(event) => onMicrophoneDeviceChange(event.target.value)}
+              className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm text-foreground outline-none transition focus:border-primary"
+            >
+              <option value="default">System default microphone</option>
+              {microphoneDevices.map((device) => (
+                <option key={device.deviceId} value={device.deviceId}>
+                  {device.label}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={onRefreshMicrophoneDevices}
+              className="text-xs font-medium text-muted-foreground underline-offset-4 transition hover:text-foreground hover:underline"
+            >
+              Refresh microphone list
+            </button>
+          </div>
           <div className="flex flex-col gap-2">
             <button
               type="button"
