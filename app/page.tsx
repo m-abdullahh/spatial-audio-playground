@@ -2,15 +2,20 @@
 
 import { useState, useRef, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
-import { Play, Pause, Upload } from 'lucide-react';
+import { Download, Mic, Pause, Play, Square, Upload } from 'lucide-react';
 import Soundstage from '@/components/soundstage';
 import ControlPanel from '@/components/control-panel';
 import Analytics from '@/components/analytics';
 import { SpatialAudioEngine, type Position } from '@/lib/spatial-audio';
 
 export default function Home() {
+  const [sourceMode, setSourceMode] = useState<'file' | 'microphone'>('file');
   const [audioFile, setAudioFile] = useState<File | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [isMicReady, setIsMicReady] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordedAudioUrl, setRecordedAudioUrl] = useState<string | null>(null);
+  const [recordedAudioName, setRecordedAudioName] = useState<string>('spatial-microphone-recording.webm');
   const [reverbAmount, setReverbAmount] = useState(0.3);
   const [dryWet, setDryWet] = useState(0.5);
   const [distanceEffect, setDistanceEffect] = useState(1.2);
@@ -19,15 +24,23 @@ export default function Home() {
   const [roomSize, setRoomSize] = useState({ w: 520, h: 350 });
   const engineRef = useRef<SpatialAudioEngine | null>(null);
   const positionsInitializedRef = useRef(false);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordedChunksRef = useRef<Blob[]>([]);
 
   useEffect(() => {
     engineRef.current = new SpatialAudioEngine();
 
     return () => {
+      if (recordedAudioUrl) {
+        URL.revokeObjectURL(recordedAudioUrl);
+      }
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+        mediaRecorderRef.current.stop();
+      }
       engineRef.current?.dispose();
       engineRef.current = null;
     };
-  }, []);
+  }, [recordedAudioUrl]);
 
   useEffect(() => {
     const engine = engineRef.current;
@@ -64,6 +77,13 @@ export default function Home() {
     const engine = engineRef.current;
     if (!file || !engine) return;
 
+    if (sourceMode === 'microphone') {
+      stopRecording();
+      engine.disconnectMicrophone(true);
+      setIsMicReady(false);
+    }
+
+    setSourceMode('file');
     setAudioFile(file);
 
     try {
@@ -78,7 +98,21 @@ export default function Home() {
 
   const togglePlayback = async () => {
     const engine = engineRef.current;
-    if (!engine?.buffer) return;
+    if (!engine) return;
+
+    if (sourceMode === 'microphone') {
+      if (isMicReady) {
+        stopRecording();
+        engine.disconnectMicrophone(true);
+        setIsMicReady(false);
+        setIsPlaying(false);
+      } else {
+        await enableMicrophoneMonitoring();
+      }
+      return;
+    }
+
+    if (!engine.buffer) return;
 
     if (isPlaying) {
       engine.stopPlayback();
@@ -87,6 +121,81 @@ export default function Home() {
       await engine.startPlayback(() => setIsPlaying(false));
       setIsPlaying(true);
     }
+  };
+
+  const enableMicrophoneMonitoring = async () => {
+    const engine = engineRef.current;
+    if (!engine) {
+      return;
+    }
+
+    try {
+      if (audioFile && isPlaying) {
+        engine.stopPlayback();
+      }
+      await engine.startMicrophoneMonitoring();
+      setSourceMode('microphone');
+      setIsMicReady(true);
+      setIsPlaying(true);
+    } catch (error) {
+      console.error('Error enabling microphone:', error);
+      setIsMicReady(false);
+      setIsPlaying(false);
+    }
+  };
+
+  const startRecording = async () => {
+    const engine = engineRef.current;
+    if (!engine) {
+      return;
+    }
+
+    if (!isMicReady) {
+      await enableMicrophoneMonitoring();
+    }
+
+    if (!engine.getRecordingStream()) {
+      return;
+    }
+
+    if (recordedAudioUrl) {
+      URL.revokeObjectURL(recordedAudioUrl);
+      setRecordedAudioUrl(null);
+    }
+
+    recordedChunksRef.current = [];
+    const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+      ? 'audio/webm;codecs=opus'
+      : 'audio/webm';
+    const recorder = new MediaRecorder(engine.getRecordingStream(), { mimeType });
+    mediaRecorderRef.current = recorder;
+    recorder.ondataavailable = (event) => {
+      if (event.data.size > 0) {
+        recordedChunksRef.current.push(event.data);
+      }
+    };
+    recorder.onstop = () => {
+      if (recordedChunksRef.current.length === 0) {
+        return;
+      }
+
+      const extension = mimeType.includes('webm') ? 'webm' : 'dat';
+      const blob = new Blob(recordedChunksRef.current, { type: mimeType });
+      const url = URL.createObjectURL(blob);
+      setRecordedAudioUrl(url);
+      setRecordedAudioName(`spatial-microphone-recording-${Date.now()}.${extension}`);
+      recordedChunksRef.current = [];
+      mediaRecorderRef.current = null;
+    };
+    recorder.start();
+    setIsRecording(true);
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop();
+    }
+    setIsRecording(false);
   };
 
   return (
@@ -112,32 +221,52 @@ export default function Home() {
                 <Button variant="outline" className="cursor-pointer" asChild>
                   <span className="flex items-center gap-2">
                     <Upload className="w-4 h-4" />
-                    Upload Audio
+                    {audioFile ? 'Replace Audio' : 'Upload Audio'}
                   </span>
                 </Button>
               </label>
               <Button
+                variant={sourceMode === 'microphone' ? 'default' : 'outline'}
+                onClick={enableMicrophoneMonitoring}
+                className="flex items-center gap-2"
+              >
+                <Mic className="w-4 h-4" />
+                {isMicReady ? 'Microphone Live' : 'Use Microphone'}
+              </Button>
+              <Button
                 onClick={togglePlayback}
-                disabled={!audioFile}
+                disabled={sourceMode === 'file' ? !audioFile : false}
                 className="bg-primary text-primary-foreground hover:bg-primary/90"
               >
-                {isPlaying ? (
+                {sourceMode === 'microphone' ? (
                   <>
-                    <Pause className="w-4 h-4 mr-2" />
-                    Pause
+                    <Mic className="w-4 h-4 mr-2" />
+                    {isMicReady ? 'Stop Monitor' : 'Monitor'}
                   </>
                 ) : (
-                  <>
-                    <Play className="w-4 h-4 mr-2" />
-                    Play
-                  </>
+                  isPlaying ? (
+                    <>
+                      <Pause className="w-4 h-4 mr-2" />
+                      Pause
+                    </>
+                  ) : (
+                    <>
+                      <Play className="w-4 h-4 mr-2" />
+                      Play
+                    </>
+                  )
                 )}
               </Button>
             </div>
           </div>
-          {audioFile && (
+          {sourceMode === 'file' && audioFile && (
             <p className="text-xs text-muted-foreground">
               Loaded: <span className="font-mono text-foreground">{audioFile.name}</span>
+            </p>
+          )}
+          {sourceMode === 'microphone' && (
+            <p className="text-xs text-muted-foreground">
+              Monitor yourself first, set the room and mic position, then record the processed output. Headphones recommended.
             </p>
           )}
         </div>
@@ -168,6 +297,13 @@ export default function Home() {
               setDryWet={setDryWet}
               distanceEffect={distanceEffect}
               setDistanceEffect={setDistanceEffect}
+              sourceMode={sourceMode}
+              isRecording={isRecording}
+              isMicReady={isMicReady}
+              onStartRecording={startRecording}
+              onStopRecording={stopRecording}
+              recordedAudioUrl={recordedAudioUrl}
+              recordedAudioName={recordedAudioName}
             />
 
             {/* Analytics */}

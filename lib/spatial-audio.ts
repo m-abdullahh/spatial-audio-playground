@@ -17,6 +17,8 @@ export interface RoomSize {
 export class SpatialAudioEngine {
   ctx: AudioContext;
   source: AudioBufferSourceNode | null = null;
+  microphoneSource: MediaStreamAudioSourceNode | null = null;
+  microphoneStream: MediaStream | null = null;
   buffer: AudioBuffer | null = null;
 
   gainNode: GainNode;
@@ -27,6 +29,7 @@ export class SpatialAudioEngine {
   wetGain: GainNode;
   reverbNode: ConvolverNode;
   masterGain: GainNode;
+  recordDestination: MediaStreamAudioDestinationNode;
 
   constructor() {
     this.ctx = new (window.AudioContext ||
@@ -39,6 +42,7 @@ export class SpatialAudioEngine {
     this.wetGain = this.ctx.createGain();
     this.reverbNode = this.ctx.createConvolver();
     this.masterGain = this.ctx.createGain();
+    this.recordDestination = this.ctx.createMediaStreamDestination();
 
     this.lowPass.type = 'lowpass';
     this.lowShelf.type = 'lowshelf';
@@ -55,6 +59,7 @@ export class SpatialAudioEngine {
     this.reverbNode.connect(this.masterGain);
 
     this.masterGain.connect(this.ctx.destination);
+    this.masterGain.connect(this.recordDestination);
     this.createImpulseResponse();
   }
 
@@ -89,6 +94,18 @@ export class SpatialAudioEngine {
     this.source = null;
   }
 
+  disconnectMicrophone(stopTracks = false) {
+    if (this.microphoneSource) {
+      this.microphoneSource.disconnect();
+      this.microphoneSource = null;
+    }
+
+    if (stopTracks && this.microphoneStream) {
+      this.microphoneStream.getTracks().forEach((track) => track.stop());
+      this.microphoneStream = null;
+    }
+  }
+
   async ensureReady() {
     if (this.ctx.state === 'suspended') {
       await this.ctx.resume();
@@ -116,6 +133,30 @@ export class SpatialAudioEngine {
     };
     source.start();
     this.source = source;
+  }
+
+  async startMicrophoneMonitoring(stream?: MediaStream) {
+    await this.ensureReady();
+    this.stopPlayback();
+
+    if (stream) {
+      this.disconnectMicrophone(true);
+      this.microphoneStream = stream;
+    }
+
+    if (!this.microphoneStream) {
+      this.microphoneStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    }
+
+    this.disconnectMicrophone(false);
+    this.microphoneSource = this.ctx.createMediaStreamSource(this.microphoneStream);
+    this.microphoneSource.connect(this.lowShelf);
+
+    return this.microphoneStream;
+  }
+
+  getRecordingStream() {
+    return this.recordDestination.stream;
   }
 
   updateSpatialParams(
@@ -157,6 +198,7 @@ export class SpatialAudioEngine {
 
   dispose() {
     this.stopPlayback();
+    this.disconnectMicrophone(true);
     void this.ctx.close();
   }
 }

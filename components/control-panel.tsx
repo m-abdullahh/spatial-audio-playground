@@ -10,6 +10,13 @@ interface ControlPanelProps {
   setDryWet: (value: number) => void;
   distanceEffect: number;
   setDistanceEffect: (value: number) => void;
+  sourceMode: 'file' | 'microphone';
+  isRecording: boolean;
+  isMicReady: boolean;
+  onStartRecording: () => void;
+  onStopRecording: () => void;
+  recordedAudioUrl: string | null;
+  recordedAudioName: string;
 }
 
 export default function ControlPanel({
@@ -19,6 +26,13 @@ export default function ControlPanel({
   setDryWet,
   distanceEffect,
   setDistanceEffect,
+  sourceMode,
+  isRecording,
+  isMicReady,
+  onStartRecording,
+  onStopRecording,
+  recordedAudioUrl,
+  recordedAudioName,
 }: ControlPanelProps) {
   return (
     <Card className="bg-card border-border p-4">
@@ -83,6 +97,42 @@ export default function ControlPanel({
             step={0.01}
             className="w-full"
           />
+        </div>
+
+        <div className="rounded-lg border border-border bg-muted/20 p-3">
+          <div className="flex items-center justify-between mb-2">
+            <label className="text-xs font-medium text-muted-foreground">
+              Microphone Recording
+            </label>
+            <span className="text-xs font-mono text-foreground">
+              {isRecording ? 'Recording' : isMicReady ? 'Ready' : 'Idle'}
+            </span>
+          </div>
+          <p className="text-xs text-muted-foreground leading-relaxed mb-3">
+            In microphone mode you can monitor your voice through the spatial chain first, then record the processed output exactly as configured.
+          </p>
+          <div className="flex flex-col gap-2">
+            <button
+              type="button"
+              onClick={isRecording ? onStopRecording : onStartRecording}
+              disabled={sourceMode !== 'microphone' && !isRecording}
+              className="inline-flex h-10 items-center justify-center rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {isRecording ? 'Stop Recording' : 'Start Recording'}
+            </button>
+            <a
+              href={recordedAudioUrl ?? undefined}
+              download={recordedAudioName}
+              aria-disabled={!recordedAudioUrl}
+              className={`inline-flex h-10 items-center justify-center rounded-md border border-border px-4 text-sm font-medium transition ${
+                recordedAudioUrl
+                  ? 'text-foreground hover:bg-muted'
+                  : 'pointer-events-none opacity-50 text-muted-foreground'
+              }`}
+            >
+              Download Last Recording
+            </a>
+          </div>
         </div>
       </div>
     </Card>

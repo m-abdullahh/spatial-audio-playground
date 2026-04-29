@@ -18,4 +18,5 @@ out/
 AppData/
 *.log
 *.err
+*.tsbuildinfo
 .DS_Store
